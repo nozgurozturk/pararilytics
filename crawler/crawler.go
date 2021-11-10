@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/cloudevents/sdk-go/v2/event"
 	"github.com/gocolly/colly"
 	"github.com/pkg/errors"
 	"log"
@@ -16,51 +15,26 @@ import (
 	"time"
 )
 
-type MessagePublishedData struct {
-	Message PubSubMessage
+// Entry defines a log entry.
+type Entry struct {
+	Message  string `json:"message"`
+	Severity string `json:"severity,omitempty"`
+	Trace    string `json:"logging.googleapis.com/trace,omitempty"`
+
+	// Logs Explorer allows filtering and display of this as `jsonPayload.component`.
+	Component string `json:"component,omitempty"`
 }
 
-type PubSubMessage struct {
-	Data []byte `json:"data"`
-}
-
-func CollectHousesOf(ctx context.Context, e event.Event) error {
-
-	projectID := os.Getenv("PROJECT_ID")
-	topicID := os.Getenv("TOPIC_ID")
-
-	client, err := pubsub.NewClient(ctx, projectID)
+// String renders an entry structure to the JSON format expected by Cloud Logging.
+func (e Entry) String() string {
+	if e.Severity == "" {
+		e.Severity = "INFO"
+	}
+	out, err := json.Marshal(e)
 	if err != nil {
-		log.Fatal(err)
+		log.Printf("json.Marshal: %v", err)
 	}
-	defer client.Close()
-
-	var msg MessagePublishedData
-	if err := e.DataAs(&msg); err != nil {
-		return fmt.Errorf("event.DataAs: %v", err)
-	}
-
-	city := string(msg.Message.Data)
-	if city == "" {
-		log.Fatal(errors.New("City name is required value"))
-	}
-
-	houses := crawlHouses(city)
-	payload, err := json.Marshal(houses)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	topic := client.Topic(topicID)
-	result := topic.Publish(ctx, &pubsub.Message{
-		Data: payload,
-	})
-
-	if _, err := result.Get(ctx); err != nil {
-		log.Fatal(err)
-	}
-
-	return nil
+	return string(out)
 }
 
 const (
@@ -69,7 +43,7 @@ const (
 	DetailItemSelector = "article.page__row--listing"
 )
 
-func crawlHouses(city string) []House {
+func CrawlHouses(city string) []House {
 	houses := make([]House, 0, 30)
 	baseCollector := colly.NewCollector(
 		colly.UserAgent("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/95.0.4638.69 Safari/537.36"),
@@ -81,7 +55,13 @@ func crawlHouses(city string) []House {
 		Parallelism: 4,
 		DomainGlob:  "*",
 	}); err != nil {
-		log.Fatal(err)
+		log.Println(Entry{
+			Message:   fmt.Sprintf("coll.Limit: %s", err.Error()),
+			Severity:  "ERROR",
+			Trace:     fmt.Sprintf("projects/%s/traces/%s", os.Getenv("PROJECT_ID"), city),
+			Component: "crawlHouses",
+		})
+		return nil
 	}
 
 	listCollector := baseCollector.Clone()
@@ -89,14 +69,22 @@ func crawlHouses(city string) []House {
 
 	listCollector.OnHTML(ListItemSelector, func(e *colly.HTMLElement) {
 		houseURL := e.Request.AbsoluteURL(e.Attr("href"))
+
 		if err := detailCollector.Visit(houseURL); err != nil {
-			log.Fatal(err)
+			log.Println(Entry{
+				Message:   fmt.Sprintf("coll.onHTML: %s", err.Error()),
+				Severity:  "ERROR",
+				Trace:     fmt.Sprintf("projects/%s/traces/%s", os.Getenv("PROJECT_ID"), city),
+				Component: "crawlHouses",
+			})
 		}
 	})
 
 	detailCollector.OnHTML(DetailItemSelector, func(e *colly.HTMLElement) {
-		house := House{}.BuildFromElement(e)
-		houses = append(houses, house)
+		house := &House{}
+		house.Address.City = city
+		house.BuildFromElement(e)
+		houses = append(houses, *house)
 	})
 
 	listCollector.OnRequest(func(r *colly.Request) {
@@ -135,8 +123,9 @@ const (
 )
 
 type Address struct {
-	City    string `json:"city,omitempty"`
-	ZipCode string `json:"zip_code,omitempty"`
+	City     string `json:"city,omitempty"`
+	District string `json:"district,omitempty"`
+	ZipCode  string `json:"zip_code,omitempty"`
 }
 
 type House struct {
@@ -150,38 +139,46 @@ type House struct {
 	CrawledAt time.Time `json:"crawled_at"`
 }
 
-func (h House) BuildFromElement(e *colly.HTMLElement) House {
+func (h *House) BuildFromElement(e *colly.HTMLElement) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Println(Entry{
+				Message:   fmt.Sprintf("coll.Limit: %s", r),
+				Severity:  "NOTICE",
+				Trace:     fmt.Sprintf("projects/%s/traces/%s", os.Getenv("PROJECT_ID")),
+				Component: "crawlHouses",
+			})
+		}
+	}()
 
 	if err := h.setIDFromURL(e.Request.URL); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	h.URL = e.Request.URL.String()
 
 	if err := h.setPriceFromText(e.ChildText(PriceSelector)); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	if err := h.setAddressFromText(e.ChildText(AddressSelector)); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	if err := h.setAreaFromText(e.ChildText(AreaSelector)); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	if err := h.setOfferDateFromText(e.ChildText(OfferDateSelector)); err != nil {
-		log.Fatal(err)
+		panic(err)
 	}
 
 	h.Interior = e.ChildText(InteriorSelector)
 	h.CrawledAt = time.Now()
 
-	return h
-
 }
 
-func (h House) setPriceFromText(priceText string) error {
+func (h *House) setPriceFromText(priceText string) error {
 	priceTextParts := strings.Split(priceText, " ")
 	if len(priceTextParts) < 1 {
 		err := errors.Errorf("text parts length must be more than one:  %d", len(priceTextParts))
@@ -199,7 +196,7 @@ func (h House) setPriceFromText(priceText string) error {
 	return nil
 }
 
-func (h House) setIDFromURL(url *url.URL) error {
+func (h *House) setIDFromURL(url *url.URL) error {
 	path := strings.Split(url.Path, "/")
 	if len(path) < 4 {
 		err := errors.Errorf("path length must be more than four:  %d", len(path))
@@ -210,7 +207,7 @@ func (h House) setIDFromURL(url *url.URL) error {
 	return nil
 }
 
-func (h House) setAddressFromText(addressText string) error {
+func (h *House) setAddressFromText(addressText string) error {
 	addressTextParts := strings.Split(addressText, "(")
 	if len(addressTextParts) < 2 {
 		err := errors.Errorf("addressTextParts length must be more than two:  %d", len(addressTextParts))
@@ -218,18 +215,19 @@ func (h House) setAddressFromText(addressText string) error {
 	}
 
 	zipCode := strings.TrimRight(addressTextParts[0], " ")
-	city := strings.TrimRight(addressTextParts[1], ")")
+	district := strings.TrimRight(addressTextParts[1], ")")
 
 	address := Address{
-		City:    city,
-		ZipCode: zipCode,
+		City:     h.Address.City,
+		District: district,
+		ZipCode:  zipCode,
 	}
 
 	h.Address = address
 	return nil
 }
 
-func (h House) setAreaFromText(areaText string) error {
+func (h *House) setAreaFromText(areaText string) error {
 	areaTextParts := strings.Split(areaText, " ")
 	if len(areaTextParts) < 1 {
 		err := errors.Errorf("addressTextParts length must be more than two:  %d", len(areaTextParts))
@@ -244,14 +242,82 @@ func (h House) setAreaFromText(areaText string) error {
 	return nil
 }
 
-
-func (h House) setOfferDateFromText(offerText string) error {
+func (h *House) setOfferDateFromText(offerText string) error {
 	offerDate, err := time.Parse("02-01-2006", offerText)
 	if err != nil {
 		return errors.WithMessage(err, OfferDateError)
 	}
 
 	h.OfferedAt = offerDate
+
+	return nil
+}
+
+type MessagePublishedData struct {
+	Message PubSubMessage
+}
+
+type PubSubMessage struct {
+	Data []byte `json:"data"`
+}
+
+func CollectHousesOf(ctx context.Context, m PubSubMessage) error {
+
+	projectID := os.Getenv("PROJECT_ID")
+	topicID := os.Getenv("TOPIC_ID")
+
+	client, err := pubsub.NewClient(ctx, projectID)
+	if err != nil {
+		log.Println(Entry{
+			Message:   fmt.Sprintf("pubSub.Client: %s", err.Error()),
+			Severity:  "ERROR",
+			Trace:     fmt.Sprintf("projects/%s/traces/%s", os.Getenv("PROJECT_ID"), ""),
+			Component: "pubSub",
+		})
+		return err
+	}
+	defer client.Close()
+
+	city := string(m.Data)
+
+	if city == "" {
+		err := errors.New("District name is required value")
+		log.Println(Entry{
+			Message:   fmt.Sprintf("pubSub.Message: %v - %s", m.Data, err.Error()),
+			Severity:  "NOTICE",
+			Trace:     fmt.Sprintf("projects/%s/traces/%s", os.Getenv("PROJECT_ID"), ""),
+			Component: "pubSub",
+		})
+		return err
+	}
+
+	houses := CrawlHouses(city)
+	payload, err := json.Marshal(houses)
+	if err != nil {
+		log.Println(Entry{
+			Message:   fmt.Sprintf("json.Marshal: %s", err.Error()),
+			Severity:  "ERROR",
+			Trace:     fmt.Sprintf("projects/%s/traces/%s", os.Getenv("PROJECT_ID"), city),
+			Component: "json.Marshall",
+		})
+		return err
+	}
+
+	topic := client.Topic(topicID)
+
+	result := topic.Publish(ctx, &pubsub.Message{
+		Data: payload,
+	})
+
+	if _, err := result.Get(ctx); err != nil {
+		log.Println(Entry{
+			Message:   fmt.Sprintf("topic.result.Get: %s", err.Error()),
+			Severity:  "ERROR",
+			Trace:     fmt.Sprintf("projects/%s/traces/%s", os.Getenv("PROJECT_ID"), city),
+			Component: "pubSub",
+		})
+		return err
+	}
 
 	return nil
 }
