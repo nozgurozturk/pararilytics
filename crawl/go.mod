@@ -1,8 +1,9 @@
-module github.com/nozgurozturk/pararilytics/crawler
+module github.com/nozgurozturk/pararilytics/crawl
 
 go 1.16
 
 require (
+	cloud.google.com/go/logging v1.4.2
 	cloud.google.com/go/pubsub v1.17.1
 	github.com/PuerkitoBio/goquery v1.8.0 // indirect
 	github.com/antchfx/htmlquery v1.2.4 // indirect
