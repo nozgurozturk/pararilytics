@@ -18,8 +18,8 @@ type PubSubMessage struct {
 const (
 	PROJECT_ID_KEY              = "PROJECT_ID"
 	FIRESTORE_COLLECTION_KEY    = "FIRESTORE_COLLECTION"
-	FIRESTORE_SUBCOLLECTION_KEY = "FIRESTORE_SUBCOLLECTION"
 )
+
 
 func Collect(ctx context.Context, msg PubSubMessage) error {
 	// Setup
@@ -55,18 +55,14 @@ func Collect(ctx context.Context, msg PubSubMessage) error {
 		return err
 	}
 
-	city := houses[0].Address.City
-
 	// Store
 	batch := store.Client.Batch()
 	houseCollection := store.Client.
-		Collection(os.Getenv(FIRESTORE_COLLECTION_KEY)).
-		Doc(city).
-		Collection(os.Getenv(FIRESTORE_SUBCOLLECTION_KEY))
+		Collection(os.Getenv(FIRESTORE_COLLECTION_KEY))
 
-	for _, house := range houses {
-		if house.ID != "" {
-			batch.Set(houseCollection.Doc(house.ID), house)
+	for _, h := range houses {
+		if h.ID != "" {
+			batch.Set(houseCollection.Doc(h.ID), h)
 		}
 	}
 
@@ -75,7 +71,7 @@ func Collect(ctx context.Context, msg PubSubMessage) error {
 		return err
 	}
 
-	logger.NewEntry(logging.Info, fmt.Sprintf("total %d houses of %s are stored into collection", len(houses), city), "")
+	logger.NewEntry(logging.Info, fmt.Sprintf("total %d houses are stored into collection", len(houses)), "")
 
 	return nil
 }

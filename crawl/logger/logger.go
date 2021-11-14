@@ -41,4 +41,6 @@ func NewEntry(severity logging.Severity, message, record string) {
 			"record":  record,
 		},
 	})
+
+
 }

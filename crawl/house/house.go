@@ -13,7 +13,8 @@ import (
 
 const (
 	PriceSelector     = ".listing-features__description--for_rent_price > span"
-	AddressSelector   = ".listing-detail-summary__location"
+	ZipCodeSelector   = ".listing-detail-summary__location"
+	AddressSelector   = ".page__row--breadcrumbs > ol.breadcrumbs > li.breadcrumbs__item > a"
 	AreaSelector      = ".listing-features__description--surface_area > span"
 	OfferDateSelector = ".listing-features__description--offered_since > span"
 	InteriorSelector  = ".listing-features__description--interior > span"
@@ -27,21 +28,21 @@ const (
 	OfferDateError = "offerDate_error:"
 )
 
-type Address struct {
-	City     string `json:"city,omitempty"`
-	District string `json:"district,omitempty"`
-	ZipCode  string `json:"zip_code,omitempty"`
-}
-
 type House struct {
-	ID        string    `json:"id,omitempty"`
-	URL       string    `json:"url,omitempty"`
-	Price     uint      `json:"price,omitempty"`
-	Area      uint      `json:"area,omitempty"`
-	Address   Address   `json:"address"`
-	Interior  string    `json:"interior,omitempty"`
-	OfferedAt time.Time `json:"offered_at"`
-	CrawledAt time.Time `json:"crawled_at"`
+	ID      string `json:"id,omitempty" firestore:"id,omitempty"`
+	URL     string `json:"url,omitempty" firestore:"url,omitempty"`
+	Price   int    `json:"price,omitempty" firestore:"price,omitempty"`
+	Area    int    `json:"area,omitempty" firestore:"area,omitempty"`
+	Address struct {
+		Province string `json:"province,omitempty" firestore:"province,omitempty"`
+		City     string `json:"city,omitempty" firestore:"city,omitempty"`
+		District string `json:"district,omitempty" firestore:"district,omitempty"`
+		Street   string `json:"street,omitempty" firestore:"street,omitempty"`
+		ZipCode  string `json:"zip_code,omitempty" firestore:"zip_code,omitempty"`
+	} `json:"address" firestore:"address"`
+	Interior  string    `json:"interior,omitempty" firestore:"interior,omitempty"`
+	OfferedAt time.Time `json:"offered_at" firestore:"offered_at,omitempty"`
+	CrawledAt time.Time `json:"crawled_at" firestore:"crawled_at,omitempty"`
 }
 
 func (h *House) BuildFromElement(e *colly.HTMLElement) {
@@ -62,7 +63,9 @@ func (h *House) BuildFromElement(e *colly.HTMLElement) {
 		panic(err)
 	}
 
-	if err := h.setAddressFromText(e.ChildText(AddressSelector)); err != nil {
+	e.ForEach(AddressSelector, h.setAddressFromElements())
+
+	if err := h.setZipCodeFromText(e.ChildText(ZipCodeSelector)); err != nil {
 		panic(err)
 	}
 
@@ -82,17 +85,18 @@ func (h *House) BuildFromElement(e *colly.HTMLElement) {
 func (h *House) setPriceFromText(priceText string) error {
 	priceTextParts := strings.Split(priceText, " ")
 	if len(priceTextParts) < 1 {
-		err := errors.Errorf("text parts length must be more than one:  %d", len(priceTextParts))
+		err := errors.Errorf("text parts length must be more than one:  %s", priceText)
 		return errors.WithMessage(err, PriceError)
 	}
 	priceReplacer := strings.NewReplacer(",", "", "€", "")
 
-	price, err := strconv.Atoi(priceReplacer.Replace(priceTextParts[0]))
+	pt := priceReplacer.Replace(priceTextParts[0])
+	price, err := strconv.Atoi(pt)
 	if err != nil {
-		return errors.WithMessage(err, PriceError)
+		return errors.WithMessage(err, PriceError+priceText)
 	}
 
-	h.Price = uint(price)
+	h.Price = price
 
 	return nil
 }
@@ -100,7 +104,7 @@ func (h *House) setPriceFromText(priceText string) error {
 func (h *House) setIDFromURL(url *url.URL) error {
 	path := strings.Split(url.Path, "/")
 	if len(path) < 4 {
-		err := errors.Errorf("path length must be more than four:  %d", len(path))
+		err := errors.Errorf("path length must be more than four:  %s", url.Path)
 		return errors.WithMessage(err, IDError)
 	}
 
@@ -108,45 +112,85 @@ func (h *House) setIDFromURL(url *url.URL) error {
 	return nil
 }
 
-func (h *House) setAddressFromText(addressText string) error {
-	addressTextParts := strings.Split(addressText, "(")
+func (h *House) setAddressFromElements() func(i int, e *colly.HTMLElement) {
+	return func(i int, e *colly.HTMLElement) {
+		switch i {
+		case 1:
+			h.Address.Province = e.Text
+		case 2:
+			h.Address.City = e.Text
+		case 3:
+			h.Address.District = e.Text
+		case 4:
+			h.Address.Street = e.Text
+		}
+	}
+}
+
+func (h *House) setZipCodeFromText(zipCodeText string) error {
+	addressTextParts := strings.Split(zipCodeText, "(")
 	if len(addressTextParts) < 2 {
-		err := errors.Errorf("addressTextParts length must be more than two:  %d", len(addressTextParts))
+		err := errors.Errorf("addressTextParts length must be more than two:  %s", zipCodeText)
 		return errors.WithMessage(err, AddressError)
 	}
 
 	zipCode := strings.TrimRight(addressTextParts[0], " ")
-	district := strings.TrimRight(addressTextParts[1], ")")
 
-	address := Address{
-		City:     h.Address.City,
-		District: district,
-		ZipCode:  zipCode,
-	}
-
-	h.Address = address
+	h.Address.ZipCode = zipCode
 	return nil
 }
 
 func (h *House) setAreaFromText(areaText string) error {
 	areaTextParts := strings.Split(areaText, " ")
 	if len(areaTextParts) < 1 {
-		err := errors.Errorf("addressTextParts length must be more than two:  %d", len(areaTextParts))
+		err := errors.Errorf("addressTextParts length must be more than two:  %s", areaText)
 		return errors.WithMessage(err, AreaError)
 	}
 	area, err := strconv.Atoi(areaTextParts[0])
 	if err != nil {
-		return errors.WithMessage(err, AreaError)
+		return errors.WithMessage(err, AreaError+areaText)
 	}
-	h.Area = uint(area)
+	h.Area = area
 
 	return nil
 }
 
 func (h *House) setOfferDateFromText(offerText string) error {
-	offerDate, err := time.Parse("02-01-2006", offerText)
+
+	var offerDate time.Time
+	var err error
+
+	now := time.Now()
+
+	if strings.Contains(offerText, "week") {
+
+		offerTextParts := strings.Split(offerText, " ")
+		week, e := strconv.Atoi(strings.TrimRight(offerTextParts[0], "+"))
+		if e != nil {
+			return errors.WithMessage(e, OfferDateError+offerText)
+		}
+
+		h.OfferedAt = now.AddDate(0, 0, -7*week)
+
+		return nil
+	}
+
+	if strings.Contains(offerText, "month") {
+
+		offerTextParts := strings.Split(offerText, " ")
+		month, e := strconv.Atoi(strings.TrimRight(offerTextParts[0], "+"))
+		if e != nil {
+			return errors.WithMessage(e, OfferDateError+offerText)
+		}
+
+		h.OfferedAt = now.AddDate(0, -1*month, 0)
+
+		return nil
+	}
+
+	offerDate, err = time.Parse("02-01-2006", offerText)
 	if err != nil {
-		return errors.WithMessage(err, OfferDateError)
+		return errors.WithMessage(err, OfferDateError+offerText)
 	}
 
 	h.OfferedAt = offerDate

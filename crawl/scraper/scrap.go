@@ -6,7 +6,9 @@ import (
 	"github.com/nozgurozturk/pararilytics/crawl/house"
 	"github.com/nozgurozturk/pararilytics/crawl/logger"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -17,11 +19,11 @@ const (
 )
 
 const (
-	ListItemSelector   = "h2.listing-search-item__title > a[href]"
-	DetailItemSelector = "article.page__row--listing"
+	ListItemSelector = "h2.listing-search-item__title > a[href]"
+	DetailItemSelector = "main.page__main"
 )
 
-func ScrapHousesOf(city string) []house.House {
+func ScrapHouses(pageNumber int) []house.House {
 	url := os.Getenv(URL_KEY)
 	cookie := os.Getenv(COOKIE_KEY)
 	houses := make([]house.House, 0, 30)
@@ -35,6 +37,7 @@ func ScrapHousesOf(city string) []house.House {
 	if err := baseCollector.Limit(&colly.LimitRule{
 		Parallelism: 4,
 		DomainGlob:  "*",
+		RandomDelay: 10 * time.Second,
 	}); err != nil {
 		logger.NewEntry(logging.Error, "can not set limit rule for collector", err.Error())
 		return nil
@@ -53,7 +56,6 @@ func ScrapHousesOf(city string) []house.House {
 
 	detailCollector.OnHTML(DetailItemSelector, func(e *colly.HTMLElement) {
 		h := &house.House{}
-		h.Address.City = city
 		h.BuildFromElement(e)
 		houses = append(houses, *h)
 	})
@@ -61,15 +63,22 @@ func ScrapHousesOf(city string) []house.House {
 	listCollector.OnRequest(func(r *colly.Request) {
 		r.Headers.Set("cookie", cookie)
 		logger.NewEntry(logging.Info, "List Visiting: "+r.URL.String(), "")
-
 	})
 
 	detailCollector.OnRequest(func(r *colly.Request) {
 		r.Headers.Set("cookie", cookie)
 		logger.NewEntry(logging.Info, "Detail Visiting: "+r.URL.String(), "")
 	})
+	n := ""
+	if pageNumber > 0 {
+		n = strconv.Itoa(pageNumber)
+	}
+	pageURL := url
+	if n != "" {
+		pageURL += "/page-" + n
+	}
 
-	listCollector.Visit(url + city)
+	listCollector.Visit(pageURL)
 
 	listCollector.Wait()
 	detailCollector.Wait()

@@ -19,5 +19,7 @@ func New(ctx context.Context, projectID string) error {
 		return err
 	}
 
+	logger.NewEntry(logging.Notice, "connected to pub/sub", "")
+
 	return nil
 }

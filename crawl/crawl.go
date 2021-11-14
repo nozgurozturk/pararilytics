@@ -3,10 +3,11 @@ package crawl
 import (
 	"cloud.google.com/go/logging"
 	"context"
+	"github.com/nozgurozturk/pararilytics/crawl/cache"
+	"github.com/nozgurozturk/pararilytics/crawl/house"
 	"github.com/nozgurozturk/pararilytics/crawl/logger"
 	"github.com/nozgurozturk/pararilytics/crawl/publisher"
 	"github.com/nozgurozturk/pararilytics/crawl/scraper"
-	"github.com/pkg/errors"
 	"os"
 )
 
@@ -14,13 +15,18 @@ type PubSubMessage struct {
 	Data []byte `json:"data"`
 }
 
-func CollectHousesOf(ctx context.Context, m PubSubMessage) error {
+func Crawl(ctx context.Context, m PubSubMessage) error {
 	// Setup
 	projectID := os.Getenv("PROJECT_ID")
+	if err := logger.New(ctx, projectID); err != nil {
+		return err
+	}
 	if err := publisher.New(ctx, projectID); err != nil {
 		return err
 	}
-	logger.NewEntry(logging.Notice, "connected to pub/sub", "")
+	if err := cache.NewClient(); err != nil {
+		return err
+	}
 
 	// TearDown
 	defer func() {
@@ -28,17 +34,28 @@ func CollectHousesOf(ctx context.Context, m PubSubMessage) error {
 			logger.NewEntry(logging.Error, "can not disconnect from pub/sub client", err.Error())
 		}
 		logger.NewEntry(logging.Notice, "disconnected from pub/sub", "")
+
+		if err := cache.Client.Close(); err != nil {
+			logger.NewEntry(logging.Error, "can not disconnect from redis instance", err.Error())
+		}
+
+		logger.NewEntry(logging.Notice, "disconnected from redis instance", "")
 	}()
 
-	city := string(m.Data)
+	houses := make([]house.House, 0)
 
-	if city == "" {
-		err := errors.New("can not found city in message data")
-		logger.NewEntry(logging.Error, "Unprocessable entity", err.Error())
-		return err
+	houseIDMap := cache.GetHouses(ctx)
+	scrappedHouses := scraper.ScrapHouses(0)
+
+	for _, sh := range scrappedHouses {
+
+		if _, ok := houseIDMap[sh.ID]; !ok {
+			houses = append(houses, sh)
+		}
+
 	}
 
-	houses := scraper.ScrapHousesOf(city)
+	cache.SetHouses(ctx, houses)
 
 	publisher.Publish(ctx, houses)
 
