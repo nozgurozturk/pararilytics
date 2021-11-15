@@ -2,7 +2,6 @@ package house
 
 import (
 	"encoding/json"
-	"github.com/nozgurozturk/pararilytics/collect"
 	"github.com/pkg/errors"
 	"time"
 )
@@ -22,10 +21,10 @@ type House struct {
 	CrawledAt time.Time `json:"crawled_at" firestore:"crawled_at,omitempty"`
 }
 
-func FromMessage(msg collect.PubSubMessage) ([]House, error) {
+func FromMessage(data []byte) ([]House, error) {
 	var houses []House
 
-	if err := json.Unmarshal(msg.Data, &houses); err != nil {
+	if err := json.Unmarshal(data, &houses); err != nil {
 		err = errors.WithMessage(err, "can not parse houses from pub/sub message")
 		return nil, err
 	}

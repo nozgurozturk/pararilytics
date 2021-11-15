@@ -48,7 +48,7 @@ func Collect(ctx context.Context, msg PubSubMessage) error {
 	}()
 
 	// Houses
-	houses, err := house.FromMessage(msg)
+	houses, err := house.FromMessage(msg.Data)
 
 	if err != nil {
 		logger.NewEntry(logging.Error, "can not parse houses from message", err.Error())

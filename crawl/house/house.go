@@ -78,7 +78,7 @@ func (h *House) BuildFromElement(e *colly.HTMLElement) {
 	}
 
 	h.Interior = e.ChildText(InteriorSelector)
-	h.CrawledAt = time.Now()
+	h.CrawledAt = time.Now().UTC()
 
 }
 
@@ -193,7 +193,14 @@ func (h *House) setOfferDateFromText(offerText string) error {
 		return errors.WithMessage(err, OfferDateError+offerText)
 	}
 
-	h.OfferedAt = offerDate
+	offerTime := time.Date(
+		offerDate.Year(),
+		offerDate.Month(),
+		offerDate.Day(),
+		now.Hour(),
+		now.Minute(),
+		0, 0, time.UTC)
+	h.OfferedAt = offerTime
 
 	return nil
 }
